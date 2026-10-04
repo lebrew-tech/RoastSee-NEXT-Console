@@ -42,7 +42,7 @@ const wanted = [
   'isAsciiTextByte',
   'calcCrc16Modbus', 'parseRoastingLiveFrame', 'getBinaryBuffer', 'setBinaryBuffer',
   'drainRoastingLiveFrames', 'handleIncomingBytes', 'isAgtronDataText',
-  'isRoastingLiveAsciiLine', 'classifyTextPacket', 'drainLineBuffer', 'addParsedLine',
+  'isRoastingLiveAsciiLine', 'isRawDumpLine', 'classifyTextPacket', 'drainLineBuffer', 'addParsedLine',
 ];
 const source = wanted.map((name) => extractFunction(html, name)).join('\n\n');
 
@@ -209,6 +209,16 @@ check('文本 7：ASCII 实时行被拆成两段也要能识别', () => {
   assert.equal(buffer, '', '拆段后没识别出来：' + JSON.stringify(buffer));
   assert.equal(packets.length, 0, '不该生成数据包');
   assert.equal(logs.length, 0, '不该刷日志：' + JSON.stringify(logs));
+});
+
+check('文本 7b：LZRAW / AGRAW 原始数据行静默忽略，不生成数据包也不刷日志', () => {
+  receivedText.length = 0; packets.length = 0; logs.length = 0;
+  const lzraw = 'LZRAW,618312,314,7324,24,9,59593A019C1C1809C6\r\r\n';
+  const agraw = 'AGRAW,618351,314,7324,24,9,36.80,14.39,37.30,37.06,37.13,37.15,0.67,0.01\r\r\n';
+  const buffer = api.drainLineBuffer('UART0', lzraw + agraw, '');
+  assert.equal(buffer, '', '行没被消费掉：' + JSON.stringify(buffer));
+  assert.equal(packets.length, 0, '原始数据行不该生成数据包：' + JSON.stringify(packets));
+  assert.equal(logs.length, 0, '原始数据行不该刷日志：' + JSON.stringify(logs));
 });
 
 check('文本 8：烘焙节点行照常进数据包', () => {

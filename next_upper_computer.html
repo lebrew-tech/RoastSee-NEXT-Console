@@ -2265,9 +2265,64 @@
       updateCommandAvailability();
     }
 
+    // 日志上限：1.1.7 起固件每秒要多打约 20 行原始数据（LZRAW / AGRAW），
+    // 原来每收到一块就 textContent += 一次 —— 日志越长每次追加越慢（整体是平方级），
+    // 实测录 1 分钟就把页面拖死。现在只留最近 LOG_MAX_LINES 行、单条截断、200ms 合并刷一次 DOM。
+    const LOG_MAX_LINES = 200;
+    const LOG_MAX_MESSAGE = 300;
+    const LOG_FLUSH_MS = 200;
+    const logStates = new WeakMap();
+
+    function logStateOf(target) {
+      let state = logStates.get(target);
+      if (!state) {
+        state = { lines: [], pending: [], timer: 0 };
+        logStates.set(target, state);
+      }
+      return state;
+    }
+
     function appendLog(target, message) {
-      target.textContent += `[${nowTime()}] ${message}\n`;
-      target.scrollTop = target.scrollHeight;
+      if (!target) return;
+      const state = logStateOf(target);
+      const text = `[${nowTime()}] ${message}`;
+      state.pending.push(text.length > LOG_MAX_MESSAGE ? `${text.slice(0, LOG_MAX_MESSAGE)}…` : text);
+      if (state.timer) return;
+      state.timer = setTimeout(() => {
+        state.timer = 0;
+        state.lines.push(...state.pending);
+        state.pending.length = 0;
+        if (state.lines.length > LOG_MAX_LINES) {
+          state.lines.splice(0, state.lines.length - LOG_MAX_LINES);
+        }
+        target.textContent = `${state.lines.join('\n')}\n`;
+        target.scrollTop = target.scrollHeight;
+      }, LOG_FLUSH_MS);
+    }
+
+    // 串口 / 蓝牙每收到一块就打一条「原始 hex + 文本」；1.1.7 之后固件每秒发 1.3 KB 原始数据，
+    // 一块几十字节就是一条，一秒几十条，日志被刷满、页面被拖死。
+    // 改成按秒汇总：每秒最多一条，带块数 / 字节数 + 最后一次的文本预览（要看逐块细节用「数据包」页）。
+    const incomingLogStates = { BLE: null, UART0: null };
+
+    function logIncomingBytes(transport, bytes) {
+      const target = transport === 'BLE' ? els.bleLog : els.serialLog;
+      let state = incomingLogStates[transport];
+      if (!state) {
+        state = incomingLogStates[transport] = { chunks: 0, bytes: 0, preview: '', timer: 0 };
+      }
+      state.chunks += 1;
+      state.bytes += bytes.length;
+      const preview = textDecoder.decode(trimTrailingZeros(bytes)).replace(/[^\x20-\x7e]+/g, ' ').trim();
+      if (preview) state.preview = summarizeTextData(preview);
+      if (state.timer) return;
+      state.timer = setTimeout(() => {
+        state.timer = 0;
+        appendLog(target, `RX ${state.chunks} 块 / ${state.bytes} 字节    ${state.preview}`);
+        state.chunks = 0;
+        state.bytes = 0;
+        state.preview = '';
+      }, 1000);
     }
 
     function getCurrentPageName() {
@@ -2654,6 +2709,12 @@
       return /^-?\d+(\.\d+)?(,-?\d+(\.\d+)?){7}$/.test(compact);
     }
 
+    // 固件 1.1.7 的「滤波前原始值」数据行（测量态 LZRAW、烘焙实时页 AGRAW），
+    // 给离线采样汇总用，上位机不展示，也不该逐条刷日志。
+    function isRawDumpLine(line) {
+      return /^\s*(LZRAW|AGRAW)\s*,/.test(String(line || ''));
+    }
+
     function summarizeTextData(text) {
       return text.replace(/\s+/g, ' ').trim().slice(0, 220);
     }
@@ -2690,6 +2751,7 @@
       if (!parsed) {
         // ASCII 实时行与二进制帧内容等价，二进制那份已经进了曲线和实时数据表，这里静默忽略即可
         if (isRoastingLiveAsciiLine(line)) return;
+        if (isRawDumpLine(line)) return;
         if (!isAgtronDataText(line)) {
           appendLog(
             transport === 'BLE' ? els.bleLog : els.serialLog,
@@ -3265,10 +3327,8 @@
         event.target.value.byteOffset,
         event.target.value.byteOffset + event.target.value.byteLength,
       ));
-      const hex = bytesToHex(bytes);
-      const text = textDecoder.decode(trimTrailingZeros(bytes));
-      appendLog(els.bleLog, `RX ${hex}    ${JSON.stringify(text)}`);
       handleIncomingBytes('BLE', bytes);
+      logIncomingBytes('BLE', bytes);
     }
 
     function onBleDisconnected() {
@@ -3337,10 +3397,8 @@
             if (!value) continue;
 
             const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
-            const hex = bytesToHex(bytes);
-            const text = textDecoder.decode(trimTrailingZeros(bytes));
-            appendLog(els.serialLog, `RX ${hex}    ${JSON.stringify(text)}`);
             handleIncomingBytes('UART0', bytes);
+            logIncomingBytes('UART0', bytes);
           }
         } catch (error) {
           appendLog(els.serialLog, tpl('串口读取异常：{error}', { error: error.message }));
@@ -3467,8 +3525,12 @@
       els.dataValueList.innerHTML = `<div class="empty-stream">${escapeHtml(t('收到 Agtron 数值后会显示在这里'))}</div>`;
       els.roastNodeValueList.innerHTML = `<div class="empty-stream">${escapeHtml(t('收到烘焙节点后会显示在这里'))}</div>`;
       els.roastNodeCountText.textContent = unitText(0, '个');
-      els.bleLog.textContent = '';
-      els.serialLog.textContent = '';
+      [els.bleLog, els.serialLog].forEach((logEl) => {
+        const state = logStateOf(logEl);
+        state.lines.length = 0;
+        state.pending.length = 0;
+        logEl.textContent = '';
+      });
       bleLineBuffer = '';
       serialLineBuffer = '';
       updateStatus();
