@@ -13,3 +13,7 @@ desktop.ini
 # 本地截图与临时验证产物
 tmp/
 scratch/
+
+# 演示视频工程（hyperframes）：约 179 MB，含录屏、中间渲染与 node_modules。
+# 成片已发布到 assets/ 并随仓库走，这里不重复入库。
+video/

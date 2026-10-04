@@ -156,6 +156,16 @@ Everything needed to talk to the NEXT is in this repo; skip this if you only wan
 - The `NEXT:` text command table: page control, start / stop roast, Agtron measurement, history read, yellow-point threshold, and more.
 - The UART0 live frame layout (header `AA55`) and its parsing logic.
 
+## Known issues
+
+- **A gap at the start of the curve.** The curve's X axis is the instrument's own roast stopwatch (it starts counting when
+  you press Start on the machine), and the console only draws live frames received *after* connecting - it does not
+  back-fill earlier data. Press Start first and then connect, reload the page mid-roast, or hit the curve reset, and that
+  opening stretch stays empty. To record a full roast, connect the console first and then press Start.
+- **The raw log keeps only the last 200 lines.** With firmware 1.1.7 the instrument emits about 20 extra raw-data lines per
+  second while measuring (`LZRAW` / `AGRAW`). Appending every one of them to the log froze the page after roughly a minute,
+  so the log is now length-capped, raw-data lines are not shown, and serial / BLE receive activity is summarised once per
+  second. For frame-by-frame detail use the `NEXT packets` tab. Verified against a continuous 15-minute recording.
 ## Acknowledgements
 
 Curve presentation in this console takes its cues from **Artisan**, the open-source roast-logging software by
